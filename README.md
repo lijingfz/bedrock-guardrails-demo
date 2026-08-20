@@ -77,7 +77,79 @@ C3b 实测：输入放行 → 模型输出邮箱和电话 → 后置检查把输
 
 同样的模式适用于 Bedrock Marketplace 模型、Custom Model Import、SageMaker 端点、自托管和第三方模型。
 
-### 2. 四种接入方式的差异
+### 2. 独立调用的 API：有，但不存在独立端点
+
+Guardrails 有两个"不调用模型也能用"的 API，但它们都挂在 `bedrock-runtime` 端点上
+（`bedrock-runtime.{region}.amazonaws.com`），`bedrock-mantle` 上不提供。所以准确说法是
+**独立于模型调用，而不是独立于 bedrock-runtime**：不需要 `modelId`、不消耗模型 token、
+不产生模型费用，可以放在应用流程的任意位置（RAG 检索前、agent 每一轮、日志清洗、
+甚至给非 Bedrock 模型做前后置校验）。
+
+| | `ApplyGuardrail` | `InvokeGuardrailChecks` |
+|---|---|---|
+| 路径 | `POST /guardrail/{id}/version/{v}/apply` | `POST /guardrail-checks/invoke` |
+| 需要先建 guardrail 资源 | 需要 | **不需要**，检查项内联在请求里 |
+| 支持的策略 | 全部 6 类 | content filter、prompt attack、sensitive information |
+| 返回 | `action=NONE\|GUARDRAIL_INTERVENED` + `assessments` + 脱敏后的文本 | 每类 `severityScore` / `confidenceScore`（0.0–1.0）+ PII 偏移量 |
+| 谁做拦截决策 | Guardrail（按你配置的 BLOCK/ANONYMIZE） | **你的应用**，自己定阈值 |
+| 方向 | `source=INPUT` / `OUTPUT` | 按 `messages` 的 role 传入 |
+| 典型用途 | 生产拦截与脱敏、版本可控 | agent 循环内打分、灰度调阈值、多模型统一评分 |
+| IAM 动作 | `bedrock:ApplyGuardrail` | `bedrock:InvokeGuardrailChecks` |
+
+`InvokeGuardrailChecks` 的枚举与常规策略不同：`promptAttack` 只接受
+`PROMPT_LEAKAGE | JAILBREAK | PROMPT_INJECTION`。实测同一条中文注入 prompt，三类分数都是 1.0。
+
+### 3. 价格（us-east-1，2026-08 抓取自官方定价页）
+
+计费单位是 **text unit = 最多 1000 字符**；超过按段数向上取整（5600 字符 = 6 units）。
+只对你启用的策略收费，**Standard tier 和 Classic tier 同价**。
+
+模型调用内联 guardrail、以及 `ApplyGuardrail`：
+
+| 策略 | 价格 |
+|---|---|
+| Content filters（文本） | $0.15 / 1,000 text units |
+| Content filters（图像） | $0.00075 / 张 |
+| Denied topics | $0.15 / 1,000 text units |
+| Sensitive information（PII） | $0.10 / 1,000 text units |
+| Sensitive information（自定义 regex） | **免费** |
+| Word filters | **免费** |
+| Contextual grounding | $0.10 / 1,000 text units |
+| Automated Reasoning checks | $0.17 / 1,000 text units / 每个 policy |
+
+`InvokeGuardrailChecks` 单独一套、且更便宜：
+
+| 策略 | 价格 |
+|---|---|
+| Content filters（仅文本） | $0.07 / 1,000 text units |
+| Prompt attack（可脱离 content filter 单独用） | $0.08 / 1,000 text units |
+| Sensitive information | $0.10 / 1,000 text units |
+
+几个影响账单的细节：
+
+- **contextual grounding 把 grounding source + query + 模型回答的字符数全部计入**，RAG 场景里
+  检索到的上下文往往几千字符，这一项通常是最贵的，不是 content filter。
+- word filter 和自定义 regex 免费，响应里 `sensitiveInformationPolicyFreeUnits` 就是这部分。
+  中文关键词屏蔽改用 regex 既解决了分词问题，又不花钱。
+- 输入和输出是两次计费。`Converse` 挂 guardrail 会同时评估 prompt 和 response。
+- 官方示例：客服机器人每小时 1000 次请求，输入 200 字符（1 unit）+ 回答 1500 字符（2 units），
+  只开 content filters 和 denied topics → 3000 units × ($0.15+$0.15)/1000 = **$0.90/小时**。
+
+本 demo 一次全量运行的实测消耗（取自 `results/raw_results.json` 的 `usage` 字段）：
+
+| 计费项 | text units | 折算 |
+|---|---|---|
+| topicPolicyUnits | 25 | $0.00375 |
+| contentPolicyUnits | 25 | $0.00375 |
+| sensitiveInformationPolicyUnits | 19 | $0.0019 |
+| contextualGroundingPolicyUnits | 2 | $0.0002 |
+| wordPolicyUnits / regex free units | 19 / 19 | $0 |
+| InvokeGuardrailChecks（三类各 5） | 15 | $0.00125 |
+| **guardrail 合计** | | **≈ $0.011** |
+
+模型调用（nova-lite + gpt-oss-20b 十余次）另计，同样是分币量级。
+
+### 4. 四种接入方式的差异
 
 | 方式 | 是否需要 guardrail 资源 | 返回 | 适用场景 |
 |---|---|---|---|
@@ -89,7 +161,7 @@ C3b 实测：输入放行 → 模型输出邮箱和电话 → 后置检查把输
 `InvokeGuardrailChecks` 的枚举与常规策略不同：`promptAttack` 只接受
 `PROMPT_LEAKAGE | JAILBREAK | PROMPT_INJECTION`（不是 `PROMPT_ATTACK`）。
 
-### 3. 中文场景必须用 Standard tier
+### 5. 中文场景必须用 Standard tier
 
 同一组用例跑 Standard 和 Classic 两个 guardrail：
 
@@ -107,7 +179,7 @@ Classic tier 官方只支持英/法/西。内容过滤和提示词攻击在中�
 
 延迟对比：Standard 约 340–570ms，Classic 约 110–220ms。
 
-### 4. 两个非显而易见的坑（实测踩到）
+### 6. 两个非显而易见的坑（实测踩到）
 
 **PII 脱敏默认不作用于输入方向。** 只写 `action: ANONYMIZE` 时，`source=INPUT` 的
 ApplyGuardrail 返回 `NONE`，assessment 里连 EMAIL 条目都不出现；同样文本走
