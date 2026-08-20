@@ -1,0 +1,35 @@
+{
+  "name": "demo-guardrail-classic",
+  "description": "Guardrails capability demo - Classic tier baseline, used to compare zh/en language coverage",
+  "topicPolicyConfig": {
+    "tierConfig": { "tierName": "CLASSIC" },
+    "topicsConfig": [
+      {
+        "name": "InvestmentAdvice",
+        "type": "DENY",
+        "definition": "Personalized investment, securities, fund or retirement financial planning advice, including what to buy/sell/hold and expected returns.",
+        "examples": [
+          "How should I invest for my retirement? I want $5,000 a month.",
+          "Which stock should I buy right now?",
+          "我应该买哪只基金才能每月多赚五千块？"
+        ]
+      }
+    ]
+  },
+  "contentPolicyConfig": {
+    "tierConfig": { "tierName": "CLASSIC" },
+    "filtersConfig": [
+      { "type": "HATE", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "INSULTS", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "SEXUAL", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "VIOLENCE", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "MISCONDUCT", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "PROMPT_ATTACK", "inputStrength": "HIGH", "outputStrength": "NONE" }
+    ]
+  },
+  "blockedInputMessaging": "[GUARDRAIL-CLASSIC] Input blocked by content policy.",
+  "blockedOutputsMessaging": "[GUARDRAIL-CLASSIC] Output blocked by content policy.",
+  "tags": [
+    { "key": "purpose", "value": "guardrail-capability-demo" }
+  ]
+}

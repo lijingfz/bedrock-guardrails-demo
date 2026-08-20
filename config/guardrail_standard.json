@@ -1,0 +1,85 @@
+{
+  "name": "demo-guardrail-standard",
+  "description": "Guardrails capability demo - Standard tier, bilingual (zh/en), 5 policy types",
+  "topicPolicyConfig": {
+    "tierConfig": { "tierName": "STANDARD" },
+    "topicsConfig": [
+      {
+        "name": "InvestmentAdvice",
+        "type": "DENY",
+        "definition": "Any request for or provision of personalized investment, securities, fund, or retirement financial planning advice, including recommendations on what to buy, sell, or hold, and expected returns. 任何关于个人投资理财、证券基金买卖、退休财务规划的具体建议或收益承诺。",
+        "examples": [
+          "How should I invest for my retirement? I want $5,000 a month.",
+          "Which stock should I buy right now?",
+          "我应该买哪只基金才能每月多赚五千块？",
+          "帮我规划一下退休投资组合。"
+        ]
+      }
+    ]
+  },
+  "contentPolicyConfig": {
+    "tierConfig": { "tierName": "STANDARD" },
+    "filtersConfig": [
+      { "type": "HATE", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "INSULTS", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "SEXUAL", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "VIOLENCE", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "MISCONDUCT", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "PROMPT_ATTACK", "inputStrength": "HIGH", "outputStrength": "NONE" }
+    ]
+  },
+  "wordPolicyConfig": {
+    "wordsConfig": [
+      { "text": "Project Athena" },
+      { "text": "内部项目雅典娜" },
+      { "text": "机密代号海神" }
+    ],
+    "managedWordListsConfig": [
+      { "type": "PROFANITY" }
+    ]
+  },
+  "sensitiveInformationPolicyConfig": {
+    "piiEntitiesConfig": [
+      { "type": "EMAIL", "action": "ANONYMIZE", "inputAction": "ANONYMIZE", "inputEnabled": true, "outputAction": "ANONYMIZE", "outputEnabled": true },
+      { "type": "PHONE", "action": "ANONYMIZE", "inputAction": "ANONYMIZE", "inputEnabled": true, "outputAction": "ANONYMIZE", "outputEnabled": true },
+      { "type": "NAME", "action": "ANONYMIZE", "inputAction": "ANONYMIZE", "inputEnabled": true, "outputAction": "ANONYMIZE", "outputEnabled": true },
+      { "type": "CREDIT_DEBIT_CARD_NUMBER", "action": "BLOCK", "inputAction": "BLOCK", "inputEnabled": true, "outputAction": "BLOCK", "outputEnabled": true }
+    ],
+    "regexesConfig": [
+      {
+        "name": "EmployeeId",
+        "description": "Internal employee ID such as EMP-123456",
+        "pattern": "EMP-[0-9]{6}",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputAction": "BLOCK",
+        "outputEnabled": true
+      },
+      {
+        "name": "ProjectAthenaCN",
+        "description": "Chinese keyword blocking - word filters need delimiters, regex does not",
+        "pattern": "内部项目雅典娜",
+        "action": "BLOCK",
+        "inputAction": "BLOCK",
+        "inputEnabled": true,
+        "outputAction": "BLOCK",
+        "outputEnabled": true
+      }
+    ]
+  },
+  "contextualGroundingPolicyConfig": {
+    "filtersConfig": [
+      { "type": "GROUNDING", "threshold": 0.75 },
+      { "type": "RELEVANCE", "threshold": 0.75 }
+    ]
+  },
+  "crossRegionConfig": {
+    "guardrailProfileIdentifier": "us.guardrail.v1:0"
+  },
+  "blockedInputMessaging": "[GUARDRAIL] 抱歉，您的输入触发了内容安全策略，我无法处理该请求。",
+  "blockedOutputsMessaging": "[GUARDRAIL] 抱歉，生成的内容触发了内容安全策略，已被拦截。",
+  "tags": [
+    { "key": "purpose", "value": "guardrail-capability-demo" }
+  ]
+}
