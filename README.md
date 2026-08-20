@@ -1,6 +1,6 @@
 # Bedrock Guardrails 能力验证 Demo
 
-纯 CLI，一条命令跑完 101 项断言，覆盖 6 类 guardrail 策略 × 4 种接入方式，其中 59 项是
+纯 CLI，一条命令跑完 101 项断言，覆盖 5 类 guardrail 策略（未含 Automated Reasoning）× 4 种接入方式，其中 59 项是
 针对两个"独立于模型调用"的 API（`ApplyGuardrail` / `InvokeGuardrailChecks`）的高覆盖测试，
 全程不调用任何大模型；另外还实测了 `bedrock-mantle` 端点对 Guardrails 的支持情况。
 
@@ -137,17 +137,24 @@ Guardrails 有两个"不调用模型也能用"的 API，但它们都挂在 `bedr
 - 官方示例：客服机器人每小时 1000 次请求，输入 200 字符（1 unit）+ 回答 1500 字符（2 units），
   只开 content filters 和 denied topics → 3000 units × ($0.15+$0.15)/1000 = **$0.90/小时**。
 
-本 demo 一次全量运行的实测消耗（取自 `results/raw_results.json` 的 `usage` 字段）：
+本 demo 一次全量运行（101 项断言，77 次带计费的 guardrail 调用）的实测消耗，
+取自 `results/raw_results.json` 的 `usage` 字段：
 
-| 计费项 | text units | 折算 |
-|---|---|---|
-| topicPolicyUnits | 25 | $0.00375 |
-| contentPolicyUnits | 25 | $0.00375 |
-| sensitiveInformationPolicyUnits | 19 | $0.0019 |
-| contextualGroundingPolicyUnits | 2 | $0.0002 |
-| wordPolicyUnits / regex free units | 19 / 19 | $0 |
-| InvokeGuardrailChecks（三类各 5） | 15 | $0.00125 |
-| **guardrail 合计** | | **≈ $0.011** |
+| 计费项 | 数量 | 单价 | 折算 |
+|---|---|---|---|
+| sensitiveInformation（InvokeGuardrailChecks） | 84 units | $0.10/1k | $0.0084 |
+| contentPolicyUnits | 54 units | $0.15/1k | $0.0081 |
+| topicPolicyUnits | 47 units | $0.15/1k | $0.0071 |
+| sensitiveInformationPolicyUnits | 48 units | $0.10/1k | $0.0048 |
+| contentFilter（InvokeGuardrailChecks） | 15 units | $0.07/1k | $0.0011 |
+| promptAttack（InvokeGuardrailChecks） | 11 units | $0.08/1k | $0.0009 |
+| contextualGroundingPolicyUnits | 6 units | $0.10/1k | $0.0006 |
+| contentPolicyImageUnits | 1 张 | $0.00075/张 | $0.0008 |
+| wordPolicyUnits / regex free units | 48 / 48 | 免费 | $0 |
+| **guardrail 合计** | | | **≈ $0.032** |
+
+其中 sensitiveInformation 那 84 units 里有 75 units 来自单条 75,000 字符的截断测试——
+这也说明超长文本是最容易把账单推高的场景。
 
 模型调用（nova-lite + gpt-oss-20b 十余次）另计，同样是分币量级。
 
@@ -240,7 +247,7 @@ NONE 三种动作、单方向启用、图像模态、两条 regex），Phase K �
 
 | 阶段 | 内容 |
 |---|---|
-| 0 | 幂等创建/更新两个 guardrail，`CreateGuardrailVersion` 发布数字版本 |
+| 0 | 幂等创建/更新 demo guardrail（standard / classic，跑 S 时再加 apitest），`CreateGuardrailVersion` 发布数字版本 |
 | A | ApplyGuardrail，Standard tier，19 个用例，`outputScope=FULL` |
 | A2 | 同一批语言对照用例跑 Classic tier，做 tier 差异对比 |
 | B | Converse + `guardrailConfig` + `trace=enabled_full`（`amazon.nova-lite-v1:0`）端到端拦截 |
@@ -274,7 +281,8 @@ src/cleanup.py                   仅删除本 demo 的 guardrail
 
 ## 成本与安全说明
 
-- 一次全量运行约 60 次 guardrail 评估 + 十余次模型调用，成本量级几美分。
+- 一次全量运行约 110 次 guardrail 评估 + 十余次模型调用，实测 guardrail 侧 ≈ $0.032，
+  模型侧同为分币量级。只跑 `--only S,K` 时是 0 次模型调用、约 70 次 guardrail 评估。
   报告里保留了 `usage` 的 text units 明细，可用于成本估算。
 - 默认按发布出来的数字版本评估（生产推荐做法）；`--no-publish` 可切回 `DRAFT` 做快速调策略。
   `DeleteGuardrail` 不带版本号时会连同所有版本一起删除。
@@ -289,3 +297,14 @@ src/cleanup.py                   仅删除本 demo 的 guardrail
   能力、端点特性都可能变化，请以最新文档和你自己的实测为准。
 - 用例中的邮箱、电话、员工号、项目代号均为构造的示例数据，不含任何真实个人信息。
 - 运行本 demo 会在你的 AWS 账号里创建 guardrail 资源并产生少量费用，请先确认账号和区域。
+
+## 更新记录
+
+- **Phase S / K**：新增两个独立 API 的高覆盖测试套件（59 项断言，零模型调用），配套
+  `config/guardrail_apitest.json` 与 `src/runner_standalone.py`。
+- **价格与独立 API 说明**：补充 `ApplyGuardrail` 与 `InvokeGuardrailChecks` 的能力对比、
+  逐策略价格表，以及本 demo 的实测计费明细。
+- **Phase 0 / V**：`CreateGuardrailVersion` 发布数字版本，并用一组实验证明已发布版本不受
+  DRAFT 编辑影响。
+- **Phase C**：实测 `bedrock-mantle` 静默忽略 `X-Amzn-Bedrock-Guardrail*` 请求头，并给出
+  三段式 sidecar 替代方案。
