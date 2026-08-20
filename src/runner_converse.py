@@ -32,7 +32,12 @@ def run(gid, phase="B/Converse", case_ids=None, version="DRAFT"):
         hits = hit_policies(assessments)
 
         expect_blocked = case["expect_action"] == "GUARDRAIL_INTERVENED"
-        blocked = stop == "guardrail_intervened"
+        # A masking intervention is not a block: the real text still reaches the user, so
+        # only a canned-message response counts as blocked. This keeps the benign baseline
+        # stable even when the model happens to emit a person name that PII masking rewrites.
+        intervened = stop == "guardrail_intervened"
+        blocked = intervened and text.startswith("[GUARDRAIL]")
+        masked_only = intervened and not blocked
         problems = []
         if blocked != expect_blocked:
             problems.append(f"stopReason={stop} expected_blocked={expect_blocked}")
@@ -41,7 +46,8 @@ def run(gid, phase="B/Converse", case_ids=None, version="DRAFT"):
                 problems.append(f"missing hit '{want}'")
         ok = not problems
         mark = f"{C.GREEN}PASS{C.OFF}" if ok else f"{C.RED}FAIL{C.OFF}"
-        print(f"  [{mark}] {case['id']:<14} {case['desc'][:44]:<46} stopReason={stop} {wall_ms}ms")
+        label = f"{stop}{' (masked only)' if masked_only else ''}"
+        print(f"  [{mark}] {case['id']:<14} {case['desc'][:44]:<46} stopReason={label} {wall_ms}ms")
         print(f"         {C.DIM}model reply: {text[:110]}{C.OFF}")
         if hits:
             print(f"         {C.DIM}hits: {', '.join(hits)}{C.OFF}")
@@ -50,8 +56,9 @@ def run(gid, phase="B/Converse", case_ids=None, version="DRAFT"):
         results.append(dict(
             phase=phase, case=case["id"], desc=case["desc"], lang=case["lang"],
             source="INPUT", expect="blocked" if expect_blocked else "allowed",
-            actual=str(stop), hits=", ".join(hits) or "-", latency=wall_ms,
+            actual=str(stop) + (" (masked only)" if masked_only else ""),
+            hits=", ".join(hits) or "-", latency=wall_ms,
             units={}, output=text[:160], ok=ok, advisory=False,
-            note="; ".join(problems) or "-",
+            note="; ".join(problems) or ("PII masked, not blocked" if masked_only else "-"),
         ))
     return results

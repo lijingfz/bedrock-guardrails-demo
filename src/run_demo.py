@@ -6,6 +6,7 @@ Usage:
     python3 src/run_demo.py --skip-setup     # reuse existing demo guardrails (latest version)
     python3 src/run_demo.py --only A,C       # run selected phases (A,B,C,D,V,S,K)
     python3 src/run_demo.py --only S,K       # model-free suites: the two standalone APIs
+    python3 src/run_demo.py --only R         # Automated Reasoning checks only
 """
 import argparse
 import sys
@@ -13,6 +14,7 @@ import sys
 import cases as CS
 import report
 import runner_apply
+import runner_ar
 import runner_checks
 import runner_converse
 import runner_mantle
@@ -33,8 +35,8 @@ def main():
                     help="do not create a numbered version; run against DRAFT")
     ap.add_argument("--force-publish", action="store_true",
                     help="always cut a new numbered version instead of reusing the latest")
-    ap.add_argument("--only", default="A,B,C,D,V,S,K",
-                    help="comma list of phases: A,B,C,D,V,S,K (S,K never invoke a model)")
+    ap.add_argument("--only", default="A,B,C,D,V,S,K,R",
+                    help="comma list of phases: A,B,C,D,V,S,K,R (S,K,R never invoke a model)")
     args = ap.parse_args()
     phases = {p.strip().upper() for p in args.only.split(",") if p.strip()}
 
@@ -98,6 +100,10 @@ def main():
             banner("PHASE K — InvokeGuardrailChecks coverage suite (no model, no guardrail resource)")
             results += runner_standalone.run_checks()
         runner_standalone.coverage_summary(results)
+
+    if "R" in phases:
+        banner("PHASE R — Automated Reasoning checks (policy build + validation, no model)")
+        results += runner_ar.run()
 
     banner("REPORT")
     failures = report.console(results)

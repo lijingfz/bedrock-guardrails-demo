@@ -1,10 +1,11 @@
 # Bedrock Guardrails 能力验证 Demo
 
-纯 CLI，一条命令跑完 101 项断言，覆盖 5 类 guardrail 策略（未含 Automated Reasoning）× 4 种接入方式，其中 59 项是
-针对两个"独立于模型调用"的 API（`ApplyGuardrail` / `InvokeGuardrailChecks`）的高覆盖测试，
-全程不调用任何大模型；另外还实测了 `bedrock-mantle` 端点对 Guardrails 的支持情况。
+纯 CLI，一条命令跑完 113 项断言，覆盖全部 6 类 guardrail 策略（含 Automated Reasoning checks）
+× 4 种接入方式。其中 71 项完全不调用大模型：59 项打两个"独立于模型调用"的 API
+（`ApplyGuardrail` / `InvokeGuardrailChecks`），12 项做 Automated Reasoning 的策略构建与形式化校验。
+另外还实测了 `bedrock-mantle` 端点对 Guardrails 的支持情况。
 
-区域：`us-east-1`。最近一次运行：**101 项，PASS 99，DIFF 2（Classic tier 中文，预期差异），FAIL 0**。
+区域：`us-east-1`。最近一次运行：**113 项，PASS 111，DIFF 2（Classic tier 中文，预期差异），FAIL 0**。
 
 ## 快速开始
 
@@ -20,6 +21,7 @@ pip install -r requirements.txt
 ./run_demo.sh --skip-setup        # 复用已有 demo guardrail 与最新版本
 ./run_demo.sh --only A,C          # 只跑指定阶段（A,B,C,D,V,S,K）
 ./run_demo.sh --only S,K          # 只跑两个独立 API 的覆盖测试（不调用任何模型）
+./run_demo.sh --only R            # 只跑 Automated Reasoning checks（首次约 2 分钟构建 policy）
 PYTHONPATH=src python3 src/cleanup.py   # 只删除本 demo 创建的两个 guardrail（含其所有版本）
 ```
 
@@ -243,6 +245,65 @@ NONE 三种动作、单方向启用、图像模态、两条 regex），Phase K �
   `PROMPT_INJECTION` 只有在明确要求"无条件执行后续指令"时才升到 1.0。做阈值决策时建议取
   三类的最大值，不要依赖单一类别。
 
+## Automated Reasoning checks（Phase R，第 6 类策略，不调用模型）
+
+`./run_demo.sh --only R` 走完整条流水线，12 项断言。它跟其他 5 类策略最大的不同：**不是填几个
+配置字段，而是要先把自然语言规则文档编译成形式化逻辑**。
+
+```
+CreateAutomatedReasoningPolicy
+  → StartAutomatedReasoningPolicyBuildWorkflow(INGEST_CONTENT, 规则文档 txt/pdf)
+  → 轮询 GetAutomatedReasoningPolicyBuildWorkflow 直到 COMPLETED（实测约 90 秒）
+  → GetAutomatedReasoningPolicyBuildWorkflowResultAssets(POLICY_DEFINITION)
+  → UpdateAutomatedReasoningPolicy        ← 关键一步，见下面的坑
+  → CreateAutomatedReasoningPolicyVersion
+  → 用 automatedReasoningPolicyConfig.policies 挂到 guardrail 上
+  → ApplyGuardrail(source=OUTPUT) 拿 findings
+```
+
+源文档是 `config/ar_policy_source.txt`（一份 8 条规则的差旅报销政策，30 行）。实测从里面抽出了
+**3 个自定义类型、11 个变量、19 条规则**，例如 `(=> (> receiptSubmissionDaysAfterExpense 30)
+(not isExpenseReimbursable))`。换成你自己的业务文档只要替换这个文件。
+
+七类 finding 里实测到五类（`impossible` / `tooComplex` 需要更极端的输入）：
+
+| 断言 | 送进去的"模型回答" | finding |
+|---|---|---|
+| R01 | 45 天后提交 → "该费用不可报销" | `valid` + `supportingRules` |
+| R02 | 我是外部承包商 → "你无权提交报销" | `valid` |
+| R03 | 总额 1500 → "需要经理审批" | `valid` |
+| R04 | 房价 400/晚 → "该住宿费可报销" | `invalid` + `contradictingRules` |
+| R05 | 我坐了商务舱 → "商务舱可报销" | `satisfiable`（只在飞行 >8h 时成立） |
+| R06 | "法国的首都是巴黎" | `noTranslations`（不属于该 policy 领域） |
+| R07 | 单日餐费 120 → "餐费可报销" | `translationAmbiguous` |
+
+### 踩到的坑与需要注意的点
+
+- **构建完成不等于策略生效。** `INGEST_CONTENT` 的 build workflow 跑到 `COMPLETED` 之后，
+  policy 的 DRAFT 定义**仍然是空的**——抽取结果只存在 build workflow 的
+  `POLICY_DEFINITION` 资产里，必须自己取出来再调 `UpdateAutomatedReasoningPolicy` 写回。
+  我第一次漏了这步，直接 `CreateAutomatedReasoningPolicyVersion`，结果发布出一个
+  **0 规则 0 变量的空 policy，而且没有任何报错**。所以 Phase R 有一条断言专门校验
+  "已发布版本里 rules>0 且 variables>0"。
+- **AR 是 detect-only。** 即使 finding 是 `invalid`，`ApplyGuardrail` 返回的 `action` 依然是
+  `NONE`，不会拦、不会改写。放行 / 重写 / 追问 / 兜底完全由你的应用决定。
+- **配置漏了会静默跳过。** 用一个没挂 AR policy 的 guardrail 打同样的文本：
+  `automatedReasoningPolicyUnits: 0`、`findings` 为空、**不报错**。上线前必须断言这个 units > 0
+  （Phase R 的 R11 就是这条负向对照）。同理在 `Converse` / `InvokeModel` 上不打
+  `guardContent` / XML 标签也会静默跳过。
+- **`ApplyGuardrail` 必须带 claim。** 只传 `qualifiers: ["query"]` 的内容会报
+  `ValidationException: No claim found in the content`——因为 `ApplyGuardrail` 不会像
+  `Converse` 那样替你把模型回答追加成 claim。
+- **findings 自带审计链**：每条规则引用同时给出 `identifier`（如 `CVQQRL3RH1Q2`）和
+  `policyVersionArn`（精确到 `:2`），可以直接落审计日志、复现当时的判定。
+- **翻译存在非确定性**：边界措辞会在 `invalid` 和 `translationAmbiguous` 之间摆动（同一句话
+  实测 3 次里 2 次 ambiguous、1 次 invalid）。把前提写清楚（明确员工类型、明确房价字段）之后
+  就稳定了。Phase R 因此给 finding 类型断言留了一次重试，但期望值本身不放宽。
+- **多条 finding 时取最严重的那条**：严重度顺序 `translationAmbiguous/tooComplex` >
+  `impossible` > `invalid` > `satisfiable` > `valid` > `noTranslations`，R12 断言了这个聚合逻辑。
+- **计费**：$0.17 / 1,000 text units / 每个 policy，是所有策略里最贵的；本次 Phase R 实测
+  共 7 units（7 次校验各 1 unit），约 $0.0012。
+
 ## 验证矩阵
 
 | 阶段 | 内容 |
@@ -256,6 +317,7 @@ NONE 三种动作、单方向启用、图像模态、两条 regex），Phase K �
 | V | 版本固定：DRAFT 改动可见、已发布版本冻结 |
 | S | **ApplyGuardrail 覆盖套件，34 项断言，不调用模型** |
 | K | **InvokeGuardrailChecks 覆盖套件，25 项断言，不调用模型、不需要 guardrail 资源** |
+| R | **Automated Reasoning checks，12 项断言：从规则文档构建 policy → 发版本 → 校验 7 类 finding** |
 
 Phase A 覆盖的策略：content filters（6 类）、denied topics、word filters（自定义词 + PROFANITY）、
 sensitive information（PII 脱敏 / 信用卡拦截 / 自定义 regex）、contextual grounding
@@ -275,19 +337,23 @@ src/runner_checks.py             Phase D
 src/runner_version.py            Phase V（版本固定验证）
 src/runner_standalone.py         Phase S / K（两个独立 API 的高覆盖测试，不调模型）
 config/guardrail_apitest.json    Phase S 专用：detect-only、方向门控、图像模态、regex 脱敏
+src/runner_ar.py                 Phase R（Automated Reasoning：建 policy → 发版本 → 校验 findings）
+config/ar_policy_source.txt      Phase R 的源规则文档（差旅报销政策，8 条规则）
+config/guardrail_ar.json         Phase R 专用 guardrail，只挂 AR policy
 src/report.py                    控制台表格 + Markdown 报告
 src/cleanup.py                   仅删除本 demo 的 guardrail
 ```
 
 ## 成本与安全说明
 
-- 一次全量运行约 110 次 guardrail 评估 + 十余次模型调用，实测 guardrail 侧 ≈ $0.032，
-  模型侧同为分币量级。只跑 `--only S,K` 时是 0 次模型调用、约 70 次 guardrail 评估。
+- 一次全量运行约 120 次 guardrail 评估 + 十余次模型调用，实测 guardrail 侧 ≈ $0.033
+  （含 AR 的 7 units × $0.17/1k），模型侧同为分币量级。`--only S,K,R` 是 0 次模型调用。
   报告里保留了 `usage` 的 text units 明细，可用于成本估算。
 - 默认按发布出来的数字版本评估（生产推荐做法）；`--no-publish` 可切回 `DRAFT` 做快速调策略。
   `DeleteGuardrail` 不带版本号时会连同所有版本一起删除。
 - `cleanup.py` 只按名字删除 `demo-guardrail-standard` / `demo-guardrail-classic` /
-  `demo-guardrail-apitest`，不会误删其它 guardrail。
+  `demo-guardrail-apitest` / `demo-guardrail-ar` 以及 AR policy `demo-ar-expense-policy`，
+  不会误删其它资源。
 - 本 demo 不调用 `PutEnforcedGuardrailConfiguration`，避免影响账号内其它 Bedrock 调用。
 
 ## 免责声明
@@ -300,6 +366,9 @@ src/cleanup.py                   仅删除本 demo 的 guardrail
 
 ## 更新记录
 
+- **Phase R**：补上第 6 类策略 Automated Reasoning checks——从规则文档自动抽取形式化规则、
+  发布 policy 版本、校验 `valid / invalid / satisfiable / noTranslations / translationAmbiguous`
+  五类 finding 与规则溯源，12 项断言、零模型调用。
 - **Phase S / K**：新增两个独立 API 的高覆盖测试套件（59 项断言，零模型调用），配套
   `config/guardrail_apitest.json` 与 `src/runner_standalone.py`。
 - **价格与独立 API 说明**：补充 `ApplyGuardrail` 与 `InvokeGuardrailChecks` 的能力对比、

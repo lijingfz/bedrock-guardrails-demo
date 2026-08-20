@@ -1,0 +1,30 @@
+Travel and Expense Reimbursement Policy (Demo)
+
+This policy defines when an employee travel expense claim is reimbursable.
+All amounts are in US dollars.
+
+1. An expense is reimbursable only if the receipt is submitted within 30 days after the
+   expense date. If the receipt is submitted more than 30 days after the expense date,
+   the expense is not reimbursable.
+
+2. A meal expense is reimbursable only if the meal amount is at most 75 dollars per day.
+   If a meal amount is greater than 75 dollars per day, the meal expense is not reimbursable.
+
+3. A hotel expense is reimbursable only if the room rate is at most 250 dollars per night.
+   If the room rate is greater than 250 dollars per night, the hotel expense is not
+   reimbursable.
+
+4. Economy class airfare is reimbursable.
+
+5. Business class airfare is reimbursable only if the flight duration is greater than
+   8 hours. If the flight duration is at most 8 hours, business class airfare is not
+   reimbursable.
+
+6. Alcohol is never reimbursable, regardless of the amount or the submission date.
+
+7. A claim requires manager approval if the total claim amount is greater than
+   1000 dollars. A claim with a total amount of at most 1000 dollars does not require
+   manager approval.
+
+8. Only full-time employees and part-time employees are eligible to submit an expense
+   claim. Contractors are not eligible to submit an expense claim.
