@@ -4,7 +4,8 @@ Usage:
     python3 src/run_demo.py                 # provision + publish version + run everything
     python3 src/run_demo.py --no-publish     # stay on DRAFT
     python3 src/run_demo.py --skip-setup     # reuse existing demo guardrails (latest version)
-    python3 src/run_demo.py --only A,C       # run selected phases (0,A,B,C,D,V)
+    python3 src/run_demo.py --only A,C       # run selected phases (A,B,C,D,V,S,K)
+    python3 src/run_demo.py --only S,K       # model-free suites: the two standalone APIs
 """
 import argparse
 import sys
@@ -15,6 +16,7 @@ import runner_apply
 import runner_checks
 import runner_converse
 import runner_mantle
+import runner_standalone
 import runner_version
 import setup_guardrail
 from common import C, REGION, banner
@@ -31,7 +33,8 @@ def main():
                     help="do not create a numbered version; run against DRAFT")
     ap.add_argument("--force-publish", action="store_true",
                     help="always cut a new numbered version instead of reusing the latest")
-    ap.add_argument("--only", default="A,B,C,D,V", help="comma list of phases: A,B,C,D,V")
+    ap.add_argument("--only", default="A,B,C,D,V,S,K",
+                    help="comma list of phases: A,B,C,D,V,S,K (S,K never invoke a model)")
     args = ap.parse_args()
     phases = {p.strip().upper() for p in args.only.split(",") if p.strip()}
 
@@ -83,6 +86,18 @@ def main():
     if "V" in phases:
         banner(f"PHASE V — Version pinning: DRAFT moves, version {std_v} is frozen")
         results += runner_version.run(std, std_v)
+
+    if "S" in phases or "K" in phases:
+        api_gid = setup_guardrail.find_by_name("demo-guardrail-apitest")
+        if not api_gid:
+            api_gid = {"id": setup_guardrail.ensure("guardrail_apitest.json")}
+        if "S" in phases:
+            banner("PHASE S — ApplyGuardrail coverage suite (no model invoked)")
+            results += runner_standalone.run_apply(api_gid["id"])
+        if "K" in phases:
+            banner("PHASE K — InvokeGuardrailChecks coverage suite (no model, no guardrail resource)")
+            results += runner_standalone.run_checks()
+        runner_standalone.coverage_summary(results)
 
     banner("REPORT")
     failures = report.console(results)

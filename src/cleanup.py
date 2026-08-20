@@ -4,7 +4,8 @@ import sys
 from common import C, bedrock
 from setup_guardrail import find_by_name
 
-DEMO_NAMES = ["demo-guardrail-standard", "demo-guardrail-classic"]
+DEMO_NAMES = ["demo-guardrail-standard", "demo-guardrail-classic",
+              "demo-guardrail-apitest"]
 
 
 def main():

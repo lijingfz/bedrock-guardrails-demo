@@ -1,0 +1,83 @@
+{
+  "name": "demo-guardrail-apitest",
+  "description": "Dedicated guardrail for standalone-API coverage tests: detect-only actions, direction gating, image modality, regex mask",
+  "topicPolicyConfig": {
+    "tierConfig": { "tierName": "STANDARD" },
+    "topicsConfig": [
+      {
+        "name": "MedicalDiagnosis",
+        "type": "DENY",
+        "definition": "Requests for a medical diagnosis, prescription, or dosage advice for a specific person's symptoms.",
+        "examples": [
+          "I have a fever and a rash, what disease do I have and what medicine should I take?",
+          "我这几天头痛发热，是什么病，该吃什么药？"
+        ],
+        "inputEnabled": true,
+        "inputAction": "BLOCK",
+        "outputEnabled": false
+      }
+    ]
+  },
+  "contentPolicyConfig": {
+    "tierConfig": { "tierName": "STANDARD" },
+    "filtersConfig": [
+      { "type": "HATE", "inputStrength": "HIGH", "outputStrength": "HIGH", "inputModalities": ["TEXT", "IMAGE"], "outputModalities": ["TEXT"] },
+      { "type": "INSULTS", "inputStrength": "HIGH", "outputStrength": "HIGH" },
+      { "type": "SEXUAL", "inputStrength": "HIGH", "outputStrength": "HIGH", "inputModalities": ["TEXT", "IMAGE"], "outputModalities": ["TEXT"] },
+      { "type": "VIOLENCE", "inputStrength": "HIGH", "outputStrength": "HIGH", "inputModalities": ["TEXT", "IMAGE"], "outputModalities": ["TEXT"] },
+      { "type": "MISCONDUCT", "inputStrength": "HIGH", "outputStrength": "HIGH", "inputAction": "NONE", "outputAction": "NONE" },
+      { "type": "PROMPT_ATTACK", "inputStrength": "HIGH", "outputStrength": "NONE" }
+    ]
+  },
+  "wordPolicyConfig": {
+    "wordsConfig": [
+      { "text": "Bluewhale" }
+    ],
+    "managedWordListsConfig": [
+      { "type": "PROFANITY" }
+    ]
+  },
+  "sensitiveInformationPolicyConfig": {
+    "piiEntitiesConfig": [
+      { "type": "EMAIL", "action": "ANONYMIZE", "inputAction": "ANONYMIZE", "inputEnabled": true, "outputAction": "ANONYMIZE", "outputEnabled": true },
+      { "type": "US_SOCIAL_SECURITY_NUMBER", "action": "BLOCK", "inputAction": "BLOCK", "inputEnabled": true, "outputAction": "BLOCK", "outputEnabled": true },
+      { "type": "AGE", "action": "NONE", "inputAction": "NONE", "inputEnabled": true, "outputAction": "NONE", "outputEnabled": true }
+    ],
+    "regexesConfig": [
+      {
+        "name": "TicketId",
+        "description": "Support ticket identifier, masked instead of blocked",
+        "pattern": "TCK-[0-9]{4}",
+        "action": "ANONYMIZE",
+        "inputAction": "ANONYMIZE",
+        "inputEnabled": true,
+        "outputAction": "ANONYMIZE",
+        "outputEnabled": true
+      },
+      {
+        "name": "SecretTag",
+        "description": "Detect-only regex: reported but no action taken",
+        "pattern": "SEC-[A-Z]{3}",
+        "action": "NONE",
+        "inputAction": "NONE",
+        "inputEnabled": true,
+        "outputAction": "NONE",
+        "outputEnabled": true
+      }
+    ]
+  },
+  "contextualGroundingPolicyConfig": {
+    "filtersConfig": [
+      { "type": "GROUNDING", "threshold": 0.8, "action": "BLOCK", "enabled": true },
+      { "type": "RELEVANCE", "threshold": 0.8, "action": "BLOCK", "enabled": true }
+    ]
+  },
+  "crossRegionConfig": {
+    "guardrailProfileIdentifier": "us.guardrail.v1:0"
+  },
+  "blockedInputMessaging": "[APITEST-BLOCK-IN] request blocked.",
+  "blockedOutputsMessaging": "[APITEST-BLOCK-OUT] response blocked.",
+  "tags": [
+    { "key": "purpose", "value": "guardrail-capability-demo" }
+  ]
+}

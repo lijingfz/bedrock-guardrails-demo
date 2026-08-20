@@ -1,9 +1,10 @@
 # Bedrock Guardrails 能力验证 Demo
 
-纯 CLI，一条命令跑完 42 项断言，覆盖 5 类 guardrail 策略 × 4 种接入方式，并实测
-`bedrock-mantle` 端点对 Guardrails 的支持情况。
+纯 CLI，一条命令跑完 101 项断言，覆盖 6 类 guardrail 策略 × 4 种接入方式，其中 59 项是
+针对两个"独立于模型调用"的 API（`ApplyGuardrail` / `InvokeGuardrailChecks`）的高覆盖测试，
+全程不调用任何大模型；另外还实测了 `bedrock-mantle` 端点对 Guardrails 的支持情况。
 
-区域：`us-east-1`。最近一次运行：**42 项，PASS 40，DIFF 2（Classic tier 中文，预期差异），FAIL 0**。
+区域：`us-east-1`。最近一次运行：**101 项，PASS 99，DIFF 2（Classic tier 中文，预期差异），FAIL 0**。
 
 ## 快速开始
 
@@ -17,7 +18,8 @@ pip install -r requirements.txt
 ./run_demo.sh --force-publish     # 强制切一个新版本号（默认复用已有最新版本）
 ./run_demo.sh --no-publish        # 全程用 DRAFT，不发布版本
 ./run_demo.sh --skip-setup        # 复用已有 demo guardrail 与最新版本
-./run_demo.sh --only A,C          # 只跑指定阶段（A,B,C,D,V）
+./run_demo.sh --only A,C          # 只跑指定阶段（A,B,C,D,V,S,K）
+./run_demo.sh --only S,K          # 只跑两个独立 API 的覆盖测试（不调用任何模型）
 PYTHONPATH=src python3 src/cleanup.py   # 只删除本 demo 创建的两个 guardrail（含其所有版本）
 ```
 
@@ -194,6 +196,46 @@ ApplyGuardrail 返回 `NONE`，assessment 里连 EMAIL 条目都不出现；同�
 中文关键词屏蔽请改用 sensitive information 的自定义 regex（`ProjectAthenaCN` 用例已验证
 可以直接命中无分隔符的中文），或用 denied topics。
 
+## 两个独立 API 的覆盖测试（Phase S / K，不调用任何模型）
+
+`./run_demo.sh --only S,K` 只打这两个 API，59 项断言，零模型调用、零模型费用。Phase S 用
+一个专门配置的 guardrail（`config/guardrail_apitest.json`，同时包含 BLOCK / ANONYMIZE /
+NONE 三种动作、单方向启用、图像模态、两条 regex），Phase K 完全不需要 guardrail 资源。
+
+覆盖维度：
+
+| API | 覆盖内容 | 断言数 |
+|---|---|---|
+| `ApplyGuardrail` | `source` INPUT/OUTPUT、`outputScope` FULL/INTERVENTIONS、6 类 content filter、BLOCK/ANONYMIZE/NONE 三种动作、按方向启用与门控、denied topics、自定义词 + PROFANITY 托管词表、PII 实体、自定义 regex、contextual grounding（GROUNDING + RELEVANCE + threshold 回显 + 部分覆盖）、`qualifiers`（grounding_source / query / guard_content）、多 content block、图像模态、text unit 计费、`guardrailCoverage`、`actionReason`、4 条错误路径 | 34 |
+| `InvokeGuardrailChecks` | 5 个 contentFilter 类别逐个打分、3 个 promptAttack 类别、7 种 PII 实体、偏移量与 message/content 索引校验、role 枚举、单项检查、逐项 usage、超长输入截断、6 条错误路径、"不需要 guardrail 资源"的结构性证明 | 25 |
+
+这套测试把一些文档里没写清的行为钉死成了断言：
+
+- **detect-only 模式**：`action: NONE` 的策略（content filter MISCONDUCT、PII AGE、regex
+  `SecretTag`）在 assessment 里 `detected: true`、`action: NONE`，整体 `action` 仍是 `NONE`，
+  文本原样返回。适合先观察再决定要不要拦。
+- **按方向门控会同时省钱**：denied topic 设 `outputEnabled: false` 后，`source=OUTPUT` 的调用
+  `topicPolicyUnits` 直接是 **0**，即不评估也不计费。
+- **BLOCK 优先于 ANONYMIZE**：同一段文本里 SSN（BLOCK）+ 邮箱（ANONYMIZE）→ 返回兜底话术，
+  邮箱不会被脱敏输出，assessment 里连 EMAIL 条目都不出现。
+- **自定义 regex 用自己的名字做占位符**：`TCK-1234` → `{TicketId}`，不是 `{REGEX}`。
+- **contextual grounding 的 coverage 与计费口径不同**：grounding source + query 计入
+  `contextualGroundingPolicyUnits`，但不算进 `guardrailCoverage.textCharacters.guarded`
+  （实测 guarded=27 / total=110）。
+- **text unit 计费边界**：1001 字符 → 每个启用策略各 2 units，两个 API 一致。
+- **图像单独计量**：一张 PNG → `contentPolicyImageUnits: 1`、`guardrailCoverage.images 1/1`。
+- **`actionReason` 三种取值**：`No action.` / `Guardrail blocked.` / `Guardrail masked.`，
+  可以直接用来区分"拦截"和"脱敏"。
+- **InvokeGuardrailChecks 的偏移量可直接切片**：`messages[messageIndex].content[contentIndex]
+  .text[beginOffset:endOffset]` 精确等于被识别的 PII 原文，方便自己做脱敏。
+- **超长输入会截断**：75,000 字符 → `truncated: true`，findings 上限 1000 条，计费 75 units。
+- **枚举边界**：`contentFilter` 只接受 `HATE|INSULTS|SEXUAL|VIOLENCE|MISCONDUCT`（没有
+  PROMPT_ATTACK），`promptAttack` 只接受 `PROMPT_LEAKAGE|JAILBREAK|PROMPT_INJECTION`，
+  PII 实体共 32 种；传错一律 `ValidationException`。
+- **打分不等于分类**：同一条攻击文本，`JAILBREAK` 和 `PROMPT_LEAKAGE` 常常同时 1.0，而
+  `PROMPT_INJECTION` 只有在明确要求"无条件执行后续指令"时才升到 1.0。做阈值决策时建议取
+  三类的最大值，不要依赖单一类别。
+
 ## 验证矩阵
 
 | 阶段 | 内容 |
@@ -205,6 +247,8 @@ ApplyGuardrail 返回 `NONE`，assessment 里连 EMAIL 条目都不出现；同�
 | C | `bedrock-runtime` vs `bedrock-mantle` 端点对比 + mantle sidecar 模式 |
 | D | InvokeGuardrailChecks 打分模式，带阈值断言 |
 | V | 版本固定：DRAFT 改动可见、已发布版本冻结 |
+| S | **ApplyGuardrail 覆盖套件，34 项断言，不调用模型** |
+| K | **InvokeGuardrailChecks 覆盖套件，25 项断言，不调用模型、不需要 guardrail 资源** |
 
 Phase A 覆盖的策略：content filters（6 类）、denied topics、word filters（自定义词 + PROFANITY）、
 sensitive information（PII 脱敏 / 信用卡拦截 / 自定义 regex）、contextual grounding
@@ -222,6 +266,8 @@ src/runner_converse.py           Phase B
 src/runner_mantle.py             Phase C（端点对比 + sidecar）
 src/runner_checks.py             Phase D
 src/runner_version.py            Phase V（版本固定验证）
+src/runner_standalone.py         Phase S / K（两个独立 API 的高覆盖测试，不调模型）
+config/guardrail_apitest.json    Phase S 专用：detect-only、方向门控、图像模态、regex 脱敏
 src/report.py                    控制台表格 + Markdown 报告
 src/cleanup.py                   仅删除本 demo 的 guardrail
 ```
@@ -232,7 +278,8 @@ src/cleanup.py                   仅删除本 demo 的 guardrail
   报告里保留了 `usage` 的 text units 明细，可用于成本估算。
 - 默认按发布出来的数字版本评估（生产推荐做法）；`--no-publish` 可切回 `DRAFT` 做快速调策略。
   `DeleteGuardrail` 不带版本号时会连同所有版本一起删除。
-- `cleanup.py` 只按名字删除 `demo-guardrail-standard` / `demo-guardrail-classic`，不会误删其它 guardrail。
+- `cleanup.py` 只按名字删除 `demo-guardrail-standard` / `demo-guardrail-classic` /
+  `demo-guardrail-apitest`，不会误删其它 guardrail。
 - 本 demo 不调用 `PutEnforcedGuardrailConfiguration`，避免影响账号内其它 Bedrock 调用。
 
 ## 免责声明
